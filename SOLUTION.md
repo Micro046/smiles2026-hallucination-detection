@@ -1,5 +1,14 @@
 # SMILES-2026 Hallucination Detection — Solution
 
+## Submission files
+
+| File | Link |
+| --- | --- |
+| `predictions.csv` | [Drive link](https://drive.google.com/file/d/1gJwz3BfMjIOAzQ_QXmB341rBkC2M8bwp/view?usp=drive_link) |
+| `results.json` | [Drive link](https://drive.google.com/file/d/1PmXmAu640gGc-19AooxJTxjF8yYy15Pn/view?usp=drive_link) |
+
+Both files are also committed to this repository.
+
 ## How to reproduce
 
 The easiest way to run this is through `solution.ipynb` on Google Colab with a T4 GPU (Runtime → Change runtime type → GPU).
