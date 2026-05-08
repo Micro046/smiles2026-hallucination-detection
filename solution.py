@@ -173,9 +173,6 @@ if __name__=='__main__':
     X_test = np.vstack([f.numpy() for f in test_features])  # (n_test, feature_dim)
 
     # ── Fit final probe on training + validation data only ──────────────────
-    # Collect the union of all train and validation indices across every split.
-    # For a single split this excludes idx_test; for k-fold every sample appears
-    # in a training fold, so all samples are used (same as fitting on X, y).
     idx_non_test = np.unique(np.concatenate([
         np.concatenate([idx_tr, idx_va]) if idx_va is not None else idx_tr
         for idx_tr, idx_va, _ in splits
