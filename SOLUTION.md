@@ -21,7 +21,7 @@ python solution.py
 
 ## Approach
 
-I only touched the three student files (`aggregation.py`, `probe.py`, `splitting.py`) and flipped the `USE_GEOMETRIC` flag to `True` in `solution.py`. Everything else is the original infrastructure.
+I only touched the three student files (`aggregation.py`, `probe.py`, `splitting.py`). `solution.py` and everything else is the original infrastructure, untouched. The geometric features are always computed inside `aggregation_and_feature_extraction` regardless of the `use_geometric` flag passed from `solution.py`, so no change to the entry point was needed.
 
 ### Feature extraction (`aggregation.py`)
 
@@ -31,7 +31,7 @@ On top of that I added what the skeleton calls geometric features. These are che
 
 ### Probe (`probe.py`)
 
-The skeleton MLP was `[in → 256 → 1]` trained for a fixed 200 epochs with no regularization. With ~13k samples and a 2738-dim input that's a recipe for overfitting, so I made a few changes. The architecture is now `[in → 512 → Dropout(0.3) → 128 → Dropout(0.3) → 1]` with weight decay 1e-4 on the optimizer. I also added early stopping — I hold out 10% of the training data internally, track validation loss, and restore the best checkpoint if it doesn't improve for 20 epochs (up to 300 max). The public `fit()` signature is unchanged, this all happens internally. Threshold tuning on the external val split was already in the skeleton and I kept it as is.
+The skeleton MLP was `[in → 256 → 1]` trained for a fixed 200 epochs with no regularization. With only 689 training samples and a 2738-dim input the ratio of features to samples is very high, so overfitting is a real concern. I made a few changes to address this. The architecture is now `[in → 512 → Dropout(0.3) → 128 → Dropout(0.3) → 1]` with weight decay 1e-4 on the optimizer. I also added early stopping — I hold out 10% of the training data internally, track validation loss, and restore the best checkpoint if it doesn't improve for 20 epochs (up to 300 max). The public `fit()` signature is unchanged, this all happens internally. Threshold tuning on the external val split was already in the skeleton and I kept it as is.
 
 The probe also auto-detects whether CUDA/MPS is available and moves computation there, which matters for running efficiently in Colab.
 
@@ -42,6 +42,19 @@ I replaced the single 70/15/15 split with stratified 5-fold cross-validation. Ea
 ### What helped most
 
 The multi-layer aggregation made the biggest difference — going from the final layer alone to a 3-layer concat gives the probe much richer signal to work with. The geometric features and regularization are meaningful but smaller gains on top of that.
+
+### Results
+
+5-fold cross-validation on the 689-sample training set (seed 42, stratified):
+
+| Split | Accuracy | F1 | AUROC |
+| --- | --- | --- | --- |
+| Majority-class baseline (test) | 70.10% | 82.42% | N/A |
+| Probe — train | 71.92% | 82.75% | 75.72% |
+| Probe — val | — | — | 68.49% |
+| Probe — test | **71.26%** | 82.45% | **68.47%** |
+
+Feature dimension: 2738 (2688 from layer concat + 50 geometric). Feature extraction time: ~164 s on a T4 GPU.
 
 ---
 

@@ -1,3 +1,43 @@
+"""
+Hallucination Detection in Small Language Models
+
+# Files you can edit:
+    - aggregation.py — layer selection and token pooling 
+    - aggregation.py | extract_geometric_features — optional hand-crafted features 
+    - probe.py | HallucinationProbe — probe classifier (nn.Module subclass) 
+    - splitting.py | split_data — train / validation / test split strategy 
+
+# Fixed infrastructure (do not edit)
+    - model.py | LLM loader (get_model_and_tokenizer) 
+    - evaluate.py | Evaluation loop, summary table, JSON output 
+
+# Data Format — ChatML and Special Tokens
+    The `prompt` column uses ChatML (Chat Markup Language), the conversation
+    template built into Qwen models.  Each message is wrapped in role markers:
+
+    <|im_start|>system
+    You are a helpful assistant.<|im_end|>
+    <|im_start|>user
+    ... question and context ... <|im_end|>
+    <|im_start|>assistant
+
+    Special tokens and their roles:
+
+    - `<|im_start|>` — opens a chat turn; the role (`system`, `user`, or `assistant`) immediately follows
+    - `<|im_end|>` — closes the current chat turn
+    - `<|endoftext|>` — end-of-sequence (EOS) token appended by the model at the end of its response
+
+    The `prompt` ends right after `<|im_start|>assistant\n` — it provides the
+    full context up to (but not including) the model's reply.  The `response`
+    column holds the actual generated text, ending with `<|endoftext|>`.
+
+    We feed the concatenation of `prompt + response` to the feature extractor
+    so the hidden states capture both the question context and the model's
+    specific answer — the hallucination signal lives in that joint representation.
+
+
+"""
+
 import time
 
 import numpy as np
@@ -16,7 +56,7 @@ from splitting import split_data
 DATA_FILE     = "./data/dataset.csv"   # path to the dataset CSV
 OUTPUT_FILE   = "results.json"         # where to write the results summary
 BATCH_SIZE    = 4
-USE_GEOMETRIC = True                   # set True to enable geometric feature extraction
+USE_GEOMETRIC = False                  # set True to enable geometric feature extraction
 TEST_FILE        = "./data/test.csv"   # competition test set (labels are null)
 PREDICTIONS_FILE = "predictions.csv"   # output file with predicted labels
 
@@ -173,6 +213,9 @@ if __name__=='__main__':
     X_test = np.vstack([f.numpy() for f in test_features])  # (n_test, feature_dim)
 
     # ── Fit final probe on training + validation data only ──────────────────
+    # Collect the union of all train and validation indices across every split.
+    # For a single split this excludes idx_test; for k-fold every sample appears
+    # in a training fold, so all samples are used (same as fitting on X, y).
     idx_non_test = np.unique(np.concatenate([
         np.concatenate([idx_tr, idx_va]) if idx_va is not None else idx_tr
         for idx_tr, idx_va, _ in splits
