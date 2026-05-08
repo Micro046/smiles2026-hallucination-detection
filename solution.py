@@ -1,42 +1,4 @@
-"""
-Hallucination Detection in Small Language Models
 
-# Files you can edit:
-    - aggregation.py — layer selection and token pooling 
-    - aggregation.py | extract_geometric_features — optional hand-crafted features 
-    - probe.py | HallucinationProbe — probe classifier (nn.Module subclass) 
-    - splitting.py | split_data — train / validation / test split strategy 
-
-# Fixed infrastructure (do not edit)
-    - model.py | LLM loader (get_model_and_tokenizer) 
-    - evaluate.py | Evaluation loop, summary table, JSON output 
-
-# Data Format — ChatML and Special Tokens
-    The `prompt` column uses ChatML (Chat Markup Language), the conversation
-    template built into Qwen models.  Each message is wrapped in role markers:
-
-    <|im_start|>system
-    You are a helpful assistant.<|im_end|>
-    <|im_start|>user
-    ... question and context ... <|im_end|>
-    <|im_start|>assistant
-
-    Special tokens and their roles:
-
-    - `<|im_start|>` — opens a chat turn; the role (`system`, `user`, or `assistant`) immediately follows
-    - `<|im_end|>` — closes the current chat turn
-    - `<|endoftext|>` — end-of-sequence (EOS) token appended by the model at the end of its response
-
-    The `prompt` ends right after `<|im_start|>assistant\n` — it provides the
-    full context up to (but not including) the model's reply.  The `response`
-    column holds the actual generated text, ending with `<|endoftext|>`.
-
-    We feed the concatenation of `prompt + response` to the feature extractor
-    so the hidden states capture both the question context and the model's
-    specific answer — the hallucination signal lives in that joint representation.
-
-
-"""
 
 import time
 
