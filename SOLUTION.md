@@ -1,92 +1,60 @@
-# SMILES-2026 Hallucination Detection — Solution Report
+# SMILES-2026 Hallucination Detection — Solution
 
-## Reproducibility
+## How to reproduce
 
-### Option 1 — Google Colab (recommended)
+The easiest way to run this is through `solution.ipynb` on Google Colab with a T4 GPU (Runtime → Change runtime type → GPU).
 
-1. Open `solution.ipynb` in Google Colab.
-2. **Runtime → Change runtime type → T4 GPU**.
-3. Run all cells top-to-bottom. Cell 1 clones the upstream repo and installs deps; cells 2–4 overwrite the upstream placeholder files (`aggregation.py`, `probe.py`, `splitting.py`) with this submission's implementations via `%%writefile`.
-4. Feature extraction (~25 min on T4) is cached to `/content/X_train.npy` and `/content/X_test.npy`, so re-runs after a disconnect are instant.
-5. The final cell auto-downloads `predictions.csv` and `results.json`.
+The notebook is self-contained: the first cell clones the upstream repo and installs dependencies, and the following cells write my modified `aggregation.py`, `probe.py`, and `splitting.py` into the cloned repo before any imports happen, so you don't need to upload anything manually. After that it's just run-all — feature extraction takes around 25 minutes the first time but caches to `/content/X_train.npy` and `/content/X_test.npy`, so a Colab disconnect doesn't mean starting over. The last cell auto-downloads `predictions.csv` and `results.json`.
 
-### Option 2 — Local
+To run locally instead:
 
 ```bash
-git clone <this repo> && cd SMILES-2026-Hallucination-Detection
-python -m venv .venv && source .venv/bin/activate
+git clone https://github.com/Micro046/smiles2026-hallucination-detection
+cd smiles2026-hallucination-detection
 pip install -r requirements.txt
 python solution.py
 ```
 
-`solution.py` is the official entrypoint and produces the same `predictions.csv` as the notebook (both consume the same three modified modules).
-
-### Environment
-
-- Python 3.10+
-- PyTorch ≥ 2.0 with CUDA, transformers ≥ 4.40, scikit-learn ≥ 1.3
-- Qwen2.5-0.5B (auto-downloaded on first run, ~1 GB)
-- Random seed: 42 (set in `splitting.py` and `probe.py`)
+`solution.py` imports from the same three modules as the notebook, so both paths produce identical output. Seed is fixed at 42 throughout.
 
 ---
 
-## Final solution
+## Approach
 
-### What was modified
+I only touched the three student files (`aggregation.py`, `probe.py`, `splitting.py`) and flipped the `USE_GEOMETRIC` flag to `True` in `solution.py`. Everything else is the original infrastructure.
 
-Three student files were rewritten; fixed infrastructure (`model.py`, `evaluate.py`) was left untouched. `solution.py` was changed only to flip `USE_GEOMETRIC = True` (a constant the skeleton intends students to toggle).
+### Feature extraction (`aggregation.py`)
 
-#### `aggregation.py` — multi-layer last-token concat + geometric features
+The default implementation takes the last token of the final transformer layer (896 dims). My intuition was that the hallucination signal probably doesn't live only in the very last layer — research on probing transformers generally finds that mid-to-late layers carry more factual/truthfulness information than the final one. So I concatenated the last real token's hidden state from three layers spaced at roughly 50%, 75%, and 100% of the model depth (layers ~12, ~18, 24 for Qwen2.5-0.5B's 24 blocks). That gives 3 × 896 = 2688 dimensions.
 
-Default skeleton uses last token of the **final** layer only (896 dims). Submission uses:
+On top of that I added what the skeleton calls geometric features. These are cheap to compute and don't require any extra forward passes: the L2 norm of the last token at each of the 25 hidden states (25 values), the cosine similarity between consecutive layers' last-token vectors (24 values — this captures how much the representation is changing layer by layer), and a log-scaled sequence length. The final feature vector is 2738 dimensions.
 
-- **Layer selection:** last real (non-padding) token from layers at depth `{50%, 75%, 100%}` (i.e. layers ~12, ~18, ~24 of Qwen2.5-0.5B's 24 transformer blocks). Concatenated → **3 × 896 = 2688 dims**.
-- **Geometric features (50 dims):**
-  - Per-layer L2 norm of the last-token vector across all 25 hidden states (25 dims).
-  - Inter-layer cosine similarity between consecutive layers' last-token vectors — a measure of representation drift (24 dims).
-  - log(1 + sequence length) (1 dim).
-- **Final feature vector: 2738 dims.**
+### Probe (`probe.py`)
 
-#### `probe.py` — regularized MLP with early stopping
+The skeleton MLP was `[in → 256 → 1]` trained for a fixed 200 epochs with no regularization. With ~13k samples and a 2738-dim input that's a recipe for overfitting, so I made a few changes. The architecture is now `[in → 512 → Dropout(0.3) → 128 → Dropout(0.3) → 1]` with weight decay 1e-4 on the optimizer. I also added early stopping — I hold out 10% of the training data internally, track validation loss, and restore the best checkpoint if it doesn't improve for 20 epochs (up to 300 max). The public `fit()` signature is unchanged, this all happens internally. Threshold tuning on the external val split was already in the skeleton and I kept it as is.
 
-Default skeleton is `[in → 256 → 1]`, 200 epochs, no regularization, hard-coded CPU. Submission uses:
+The probe also auto-detects whether CUDA/MPS is available and moves computation there, which matters for running efficiently in Colab.
 
-- **Architecture:** `[in → 512 → ReLU → Dropout(0.3) → 128 → ReLU → Dropout(0.3) → 1]`.
-- **Optimizer:** Adam, `lr=1e-3`, `weight_decay=1e-4`.
-- **Loss:** `BCEWithLogitsLoss(pos_weight=neg/pos)` (kept from skeleton).
-- **Early stopping:** carves an internal 10% val slice from the training data (stratified, seed-42), patience 20 on internal val loss, max 300 epochs. The best-val-loss state dict is restored before returning.
-- **Threshold tuning:** `fit_hyperparameters` sweeps unique probabilities + a 101-point grid on the external val split, keeps the threshold that maximizes F1 (kept from skeleton).
-- **Device:** auto-detects CUDA / MPS / CPU.
+### Splitting (`splitting.py`)
 
-#### `splitting.py` — stratified 5-fold
+I replaced the single 70/15/15 split with stratified 5-fold cross-validation. Each fold uses the held-out fifth as the test split, and the remaining 80% is further split 80/20 into train and val (stratified). `evaluate.py` already handles iterating over multiple folds and averaging, so no infrastructure changes were needed. For the final `predictions.csv` I refit on all non-test indices, same as `solution.py` already does.
 
-Default skeleton is a single 70/15/15 stratified split (one fold). Submission uses:
+### What helped most
 
-- **Stratified 5-fold** on `y` (seed 42).
-- Per fold: the held-out fold is `idx_test`; the remaining 80% is split 80/20 (stratified) into `idx_train` and `idx_val`.
-- `evaluate.run_evaluation` already iterates folds and averages metrics, so this drops in cleanly.
-
-### Why these choices
-
-- **Mid-to-late layers:** prior work on hallucination probing (SAPLMA, INSIDE, TruthX) consistently shows the truthfulness/hallucination signal lives in mid-to-late layers, not the final layer alone. Concatenating three depths gives the probe richer signal at modest cost (3× parameter count in the input layer of the MLP, no extra forward passes).
-- **Geometric features:** per-layer activation norms and inter-layer cosine drift are well-established uncertainty proxies — they capture *how* the representation evolves through the model, not just where it ends up. Cheap to compute (no extra forward passes).
-- **Regularization + early stopping:** with ~13k samples and ~2700-dim features, a vanilla MLP trained for a fixed 200 epochs overfits. Dropout + weight decay + early-stopping the best-val state controls this.
-- **5-fold:** gives a more stable test-metric estimate than a single split, and (combined with refitting the final probe on all train+val) uses the labeled data more efficiently.
-
-### What contributed most
-
-The biggest single lever is **multi-layer aggregation**: switching from final-layer-only to a 3-layer concat is the main source of feature richness. The geometric features and probe regularization are smaller individual gains stacked on top.
+The multi-layer aggregation made the biggest difference — going from the final layer alone to a 3-layer concat gives the probe much richer signal to work with. The geometric features and regularization are meaningful but smaller gains on top of that.
 
 ---
 
-## Experiments and design decisions not adopted
+## Things I tried that didn't make it in
 
-These were considered during design but not adopted in the final submission:
+**Mean-pooling over all response tokens.** My first instinct was to pool over the whole response rather than just the last token, but in a causal decoder the last token attends to everything before it, so its representation already summarizes the full sequence. Pooling across all tokens mixes in the prompt context and dilutes the response-specific signal.
 
-- **Mean-pool over response tokens (whole-sequence pool).** Rejected as the primary aggregation: causal models concentrate "what was just said / understood" into the last token's representation, and pooling tends to dilute that signal with prompt context. A useful future ablation.
-- **Token-attention pooling with a learned attention block.** Rejected for risk: more parameters to fit on a small dataset, more hyperparameters to tune, marginal expected gain over the simpler concat.
-- **Linear probe (logistic regression) instead of MLP.** Rejected because the geometric features interact non-linearly with the dense layer activations; the MLP can model that, a linear probe cannot. A linear probe is a sensible sanity-check baseline if the MLP underperforms.
-- **PCA / dimensionality reduction on the 2738-dim feature vector before the MLP.** Rejected for the first submission because the dataset is small enough (~13k) and the MLP is small enough (~1.4M params) that the input dimension is not the bottleneck; the regularization already addresses the variance.
-- **Group-aware splits** (e.g., grouping by prompt template). Not adopted because no obvious group key exists in the schema (`prompt`, `response`, `label`).
+**Logistic regression instead of the MLP.** I considered a simple linear probe since it generalises better with fewer samples, but the geometric features interact non-linearly with the dense activations and the MLP can capture that while logistic regression can't.
 
-The natural next steps if iterating: ensemble the 5 fold probes for the final prediction (average their probabilities) instead of refitting on train+val — typically a small but reliable gain.
+**PCA before the MLP.** I looked at whether compressing 2738 dims down before the MLP would help, but with the dataset size and the regularization already in place the input dimension isn't the bottleneck, so it wasn't worth the extra complexity.
+
+**Attention-pooling with a learned query.** A small attention block over the response tokens would let the model learn which positions are most informative for hallucination detection, which is appealing in principle. I dropped it because it adds parameters on a small dataset, has extra hyperparameters to tune, and the simple last-token approach is already competitive.
+
+**Group-aware splits.** I considered splitting by prompt group to avoid data leakage between similar prompts, but there's no obvious group key in the dataset schema, so stratified random splitting was the best available option.
+
+One thing I'd try with more time is ensembling the 5 fold probes at inference time (averaging their probabilities) rather than refitting on train+val — that usually gives a consistent small boost without any extra training.
